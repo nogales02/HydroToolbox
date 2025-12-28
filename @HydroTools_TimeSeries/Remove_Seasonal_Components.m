@@ -1,0 +1,211 @@
+function obj = Remove_Seasonal_Components(obj, varargin)
+% REMOVE_SEASONAL_COMPONENTS Remueve componentes estacionales usando FFT
+%
+% SINTAXIS:
+%   obj_clean = Remove_Seasonal_Components(obj)
+%   obj_clean = Remove_Seasonal_Components(obj, 'VarianceThreshold', 0.7)
+%
+% PARÁMETROS DE ENTRADA:
+%   obj                 - Objeto HydroTools_TimeSeries
+%   'Code'              - Códigos de estaciones a procesar (por defecto: todas)
+%   'VarianceThreshold' - Umbral de varianza para remover armónicos (default: 0.7)
+%
+% RETORNA:
+%   obj - Objeto con datos limpios (armónicos >umbral removidos)
+
+%% Input parsing
+p = inputParser;
+addRequired(p, 'obj', @(x) isstruct(x) || isobject(x));
+addParameter(p, 'Code', [], @(x) isnumeric(x) || isempty(x));
+addParameter(p, 'VarianceThreshold', 0.7, @(x) isnumeric(x) && x > 0 && x < 1);
+
+parse(p, obj, varargin{:});
+Code_PoPo = p.Results.Code;
+varianceThreshold = p.Results.VarianceThreshold;
+
+%% Station selection
+if ~isempty(Code_PoPo)
+    [~, PoPo] = ismember(Code_PoPo, obj.Code);
+    PoPo(PoPo == 0) = [];
+else
+    PoPo = 1:length(obj.Code);
+end
+
+%% Create output directory
+mkdir(fullfile(obj.PathProject,'FIGURES','Harmonic'));
+
+%% Main processing loop
+for ii = 1:length(PoPo)
+    % try
+        stationIdx = PoPo(ii);
+        Data_orig  = obj.Data(:, stationIdx);
+        Date_full  = obj.Date;
+        nan_idxO   = isnan(Data_orig);
+
+        %% Extract only period with data (first to last valid record)
+        idPo = find(~isnan(Data_orig));
+        if length(idPo) < 365 % Need at least 1 year
+            continue;
+        end
+
+        % Work only with period that has data
+        Data = Data_orig(idPo(1):idPo(end));
+        Date = Date_full(idPo(1):idPo(end));
+
+        % Interpolate internal NaN values for FFT
+        nan_idx = isnan(Data);
+        if any(nan_idx)
+            valid_idx = find(~nan_idx);
+            Data(nan_idx) = interp1(valid_idx, Data(valid_idx), find(nan_idx), 'linear', 'extrap');
+        end
+
+        %% FFT decomposition
+        N = length(Data);
+
+        % 1. Remove linear trend
+        trend_coeff = polyfit(1:N, Data', 1);
+        trend = polyval(trend_coeff, 1:N)';
+        detrended = Data - trend;
+
+        % 2. FFT analysis
+        Y = fft(detrended);
+        frequencies = (0:N-1)/N;
+
+        % 3. Fast variance threshold using power spectrum directly
+        P = abs(Y).^2; % Power spectrum
+        total_power = sum(P);
+
+        % Sort ALL harmonics by power (include DC component)
+        [P_sorted, sort_idx] = sort(P, 'descend');
+
+        % Reconstruct series using dominant harmonics until threshold
+        Y_reconstructed = zeros(size(Y));
+        cumulative_power = 0;
+
+        for i = 1:length(P_sorted)
+            k = sort_idx(i);
+            power_contribution = P_sorted(i) / total_power;
+
+            % Add this harmonic to reconstruction
+            Y_reconstructed(k) = Y(k);
+            cumulative_power = cumulative_power + power_contribution;
+
+            % Stop when we've captured enough variance
+            if cumulative_power >= varianceThreshold
+                break;
+            end
+        end
+
+        % 4. Reconstruct the dominant series (contains DC + main harmonics)
+        reconstructed_series = real(ifft(Y_reconstructed));
+
+        % 5. Calculate residual (remove reconstructed from original detrended data)
+        residual = detrended - (reconstructed_series - Y_reconstructed(1)/N); % Remove DC from seasonal component
+
+        %% Store individual harmonics for plotting (top 5)
+        [~, power_idx] = sort(abs(Y).^2, 'descend');
+        individual_harmonics = [];
+        harmonic_labels = {};
+
+        % Define period limits for plotting
+        min_period = 30;   % days
+        max_period = 5*365; % 5 years
+
+        count = 0;
+        for k = 2:length(power_idx) % Skip DC
+            idx = power_idx(k);
+            period = 1/frequencies(idx);
+
+            if period >= min_period && period <= max_period && count < 5
+                % Reconstruct this single harmonic
+                Y_single = zeros(size(Y));
+                Y_single(idx) = Y(idx);
+                if idx > 1 && idx <= N/2
+                    Y_single(N-idx+2) = Y(N-idx+2);
+                end
+
+                harmonic = real(ifft(Y_single));
+                individual_harmonics(:, end+1) = harmonic;
+
+                if period > 300
+                    harmonic_labels{end+1} = sprintf('%.1f years', period/365);
+                else
+                    harmonic_labels{end+1} = sprintf('%.0f days', period);
+                end
+
+                count = count + 1;
+            end
+        end
+
+        %% Update object with cleaned data (restore original NaN positions)
+        Data_clean = obj.Data(:, stationIdx);
+        Data_clean(idPo(1):idPo(end)) = residual;
+
+        % CRITICAL: Restore NaN values in their original positions
+        Data_clean(nan_idxO) = NaN;
+        Data(nan_idxO(idPo(1):idPo(end))) = NaN;
+        residual(nan_idxO(idPo(1):idPo(end))) = NaN;
+        obj.Data(:, stationIdx) = Data_clean;
+        
+        %% Generate plots
+        if obj.StatusPlot
+            Fig = figure('color', [1 1 1], 'Visible', 'off');
+            T = [16, 12];
+            set(Fig, 'Units', 'Inches', 'PaperPosition', [0, 0, T], ...
+                'Position', [0, 0, T], 'PaperUnits', 'Inches', ...
+                'PaperSize', T, 'PaperType', 'usletter');
+
+            % 1. Original Data
+            subplot(4,1,1);
+            plot(Date, Data, 'k-', 'LineWidth', 1.5);
+            ylabel('\bf Original Data', 'Interpreter', 'latex');
+            title(['\bf Harmonic Decomposition - Station ', num2str(obj.Code(stationIdx))], ...
+                  'Interpreter', 'latex');
+            grid on;
+
+            % 2. Trend
+            subplot(4,1,2);
+            plot(Date, trend, 'g-', 'LineWidth', 1.5);
+            ylabel('\bf Trend', 'Interpreter', 'latex');
+            grid on;
+
+            % 3. Harmonic Components (Individual Harmonics)
+            subplot(4,1,3);
+            if ~isempty(individual_harmonics)
+                colors = lines(size(individual_harmonics, 2));
+                for h = 1:size(individual_harmonics, 2)
+                    plot(Date, individual_harmonics(:, h), ...
+                         'Color', colors(h, :), 'LineWidth', 1.2);
+                    hold on;
+                end
+                legend(harmonic_labels, 'Interpreter', 'latex', 'FontSize', 8);
+            end
+            ylabel('\bf Harmonic Components', 'Interpreter', 'latex');
+            grid on;
+
+            % 4. Cleaned Data (without trend and harmonics)
+            subplot(4,1,4);
+            plot(Date, residual, 'b-', 'LineWidth', 1.5);
+            ylabel('\bf Cleaned Data', 'Interpreter', 'latex');
+            xlabel('\bf Time', 'Interpreter', 'latex');
+            grid on;
+
+            % Save figure
+            saveas(Fig, fullfile(obj.PathProject,'FIGURES','Harmonic',...
+                                [num2str(obj.Code(stationIdx)),'.jpg']));
+            close(Fig);
+        end
+
+        %% Display progress
+        components_used = sum(abs(Y_reconstructed) > 0);
+        disp([num2str((ii/length(PoPo))*100,'%.1f'),'% -> Station ', ...
+              num2str(obj.Code(stationIdx)), ' -> ', num2str(components_used), ...
+              ' harmonics used (', num2str(cumulative_power*100,'%.1f'), '% power)']);
+    % 
+    % catch ME
+    %     disp([num2str((ii/length(PoPo))*100,'%.1f'),'% -> Station ', ...
+    %           num2str(obj.Code(stationIdx)), ' ERROR: ', ME.message]);
+    % end
+end
+
+end

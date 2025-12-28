@@ -1,0 +1,280 @@
+function [Summary, Sdate] = Synthetic(obj, varargin)
+% -------------------------------------------------------------------------
+% Matlab - R2018b 
+% -------------------------------------------------------------------------
+%                           Informaci�n Basica
+%--------------------------------------------------------------------------
+% Autor         : Jonathan Nogales Pimentel
+% Email         : jonathannogales02@gmail.com
+% Componente    : Modelaci�n Hidrologica
+% Organizaci�n  : The Nature Conservancy - TNC
+% Fecha         : 01- July - 2019
+%
+%--------------------------------------------------------------------------
+% Este programa es de uso libre: Usted puede redistribuirlo y/o modificarlo 
+% bajo los t�rminos de la licencia publica general GNU. El autor no se hace 
+% responsable de los usos que pueda tener.Para mayor informaci�n revisar 
+% http://www.gnu.org/licenses/.
+%
+% -------------------------------------------------------------------------
+% Proyecto
+%--------------------------------------------------------------------------
+% Consultor�a t�cnica para el an�lisis de la cuenca alta y propuesta de 
+% medidas de conservaci�n que contribuyan a la resiliencia de la cuenca del
+% r�o Juan D�az en ciudad de Panam� para la mitigaci�n del riesgo por 
+% inundaci�n
+%
+% -------------------------------------------------------------------------
+% Descripci�n del Codigo
+% -------------------------------------------------------------------------
+% Este c�digo permite descargar la informaci�n de precipitaci�n, temperatura 
+% m�nima y m�xima a resoluci�n diaria de los modelos meteorol�gicos globales 
+% que modelan el cambio clim�tico (GCM). En total son 21 GCM de los cuales 
+% se descarga la informaci�n, tanto para el hist�rico como para los 
+% escenarios rcp45 y rcp85 
+%
+% -------------------------------------------------------------------------
+% Input Data
+% -------------------------------------------------------------------------
+% 
+% -------------------------------------------------------------------------
+% Output Data
+% -------------------------------------------------------------------------
+
+%% Create Folder
+mkdir(fullfile(obj.PathProject,'RESULTS'))
+
+if nargin > 1
+    Code_PoPo = varargin{1}; 
+else
+    Code_PoPo = [];
+end
+
+if ~isempty(Code_PoPo)
+    [~, PoPo] = ismember(Code_PoPo, obj.Code);
+else
+    PoPo = 1:length(obj.Code);
+end
+
+if nargin > 2
+    NameFile = fullfile(obj.PathProject,'RESULTS',[varargin{2},'.csv']);    
+else
+    NameFile = fullfile(obj.PathProject,'RESULTS','SyntheticSummary.csv');
+end
+
+if nargin > 3
+    NamFun = varargin{3};
+else
+    NamFun = 'Mean';
+end
+
+if nargin > 4
+    NamVar = varargin{4};
+else
+    NamVar = '\bf Variable';
+end
+
+mkdir(fullfile(obj.PathProject,'FIGURES','Synthetic'))
+
+%% Storage
+Summary = zeros(length(PoPo), 10 + 12);
+Sdate   = cell(length(PoPo), 2);
+
+for ii = 14:length(PoPo)  
+    ii
+    id          = find(~isnan(obj.Data(:,PoPo(ii))));
+    if isempty(id)
+        continue
+    end
+    Data        = obj.Data(id(1):id(end),PoPo(ii));
+    Date        = obj.Date(id(1):id(end));
+
+    Summary(ii,1)  = min(Data);
+    Summary(ii,2)  = max(Data);
+    Summary(ii,3)  = mean(Data,'omitnan');
+    Summary(ii,4)  = std(Data(~isnan(Data)));
+    Summary(ii,5)  = var(Data(~isnan(Data)));
+    Summary(ii,6)  = sum(~isnan(Data));    
+    Summary(ii,7)  = (sum(~isnan(Data))/length(Data))*100;
+    Summary(ii,8)  = length(unique(year(Date)));
+    Summary(ii,9)  = sum(isnan(Data));
+    Summary(ii,10) = (sum(isnan(Data))/length(Data))*100;
+
+    m = month(Date);
+    for i = 1:12
+        if strcmp(NamFun,'Mean')
+            MyFun   = @(x) mean(x,'omitmissing');
+            Summary(ii,10+i) = mean(Data(m == i),'omitnan');
+        elseif strcmp(NamFun,'Max')
+            MyFun   = @(x) max(x);
+            Summary(ii,10+i) = max(Data(m == i));
+        elseif strcmp(NamFun,'Min')
+            MyFun   = @(x) min(x);
+            Summary(ii,10+i) = min(Data(m == i),'omitnan');
+        elseif strcmp(NamFun,'Sum')
+            MyFun   = @(x) sum(x,'omitmissing');
+            Summary(ii,10+i) = sum(Data(m == i),'omitnan');
+        end
+    end
+
+    Sdate{ii,1}    = datestr(Date(1), 'yyyy/mm/dd HH:MM:SS');
+    Sdate{ii,2}    = datestr(Date(end),'yyyy/mm/dd HH:MM:SS');
+
+    %% Agregar la información a nivel mensual    
+    Table_i = table(Date, Data , year(Date), month(Date), day(Date), hour(Date), minute(Date),...
+                    'VariableNames',{'Date','Value','Y','M','D','H','MM'});
+
+    Tmp     = table2array(varfun(MyFun,Table_i,'GroupingVariables',{'Y','M'},'InputVariable','Value'));
+    DateM   = datetime(Tmp(:,1), Tmp(:,2), Tmp(:,1)*0 + 1, Tmp(:,1)*0 + 1, Tmp(:,1)*0 + 1, Tmp(:,1)*0 + 1);
+   
+    DDM         = (datetime(Tmp(1,1),1,1,1,1,1):calmonths:datetime(Tmp(end,1),12,1,1,1,1))';
+    [id,posi]   = ismember(DDM,DateM);
+    
+    DataM       = NaN(numel(DDM),size(Tmp(:,4:end),2));
+    DataM(id,:) = Tmp(posi(id),4:end);
+    DateM       = DDM;
+    
+    %% Agregar la información a nivel anual
+    Table_i = table(Date, Data , year(Date), month(Date), day(Date), hour(Date), minute(Date),...
+                    'VariableNames',{'Date','Value','Y','M','D','H','MM'});
+
+    Tmp     = table2array(varfun(MyFun,Table_i,'GroupingVariables',{'Y'},'InputVariable','Value'));
+    DateY   = datetime(Tmp(:,1), Tmp(:,1)*0 + 1, Tmp(:,1)*0 + 1);
+    DataY   = Tmp(:,3);
+    
+    Y       = year(Date);
+    YY      = unique(Y);
+    DataAD  = NaN(366,numel(YY));
+    
+    if numel(YY) > 5
+        PosiL = round(linspace(2,numel(YY),6),0);
+    else
+        PosiL = 1:numel(YY);
+    end
+
+    for j = 1:numel(YY)
+        id = Y == YY(j);
+        DataAD(1:sum(id),j) = Data(id);        
+    end
+
+    LabelBoxPlotA = cell(1,numel(PosiL));
+    for j = 1:numel(PosiL)
+        LabelBoxPlotA{j} = num2str(YY(PosiL(j)));
+    end
+
+    %% Crear graficos resumen
+    if obj.StatusPlot
+        mkdir(fullfile(obj.PathProject,'FIGURES'))
+        
+        %% Plot Datos faltantes
+        Fig     = figure('color',[1 1 1], 'Visible','off');
+        T       = [20, 15];
+        set(Fig, 'Units', 'Inches', 'PaperPosition', [0, 0, T],'Position',...
+            [0, 0, T],'PaperUnits', 'Inches','PaperSize', T,'PaperType','e')
+    
+        %% Plot 1 - Serie de tiempo diaria
+        subplot(3,3,1)
+        h = area(Date,Data);
+        h(1).FaceColor = obj.ColorsF('orange (web color)');
+        h(1).EdgeColor = obj.ColorsF('orange (web color)');
+        h(1).FaceAlpha = 0.4;
+        %xlabel('\bf Tiempo (D\''ias)','Interpreter','latex','FontSize',18)
+        ylabel(NamVar,'Interpreter','latex','FontSize',18)
+        title('\bf Serie de tiempo d\''iaria','Interpreter','latex','FontSize',25,'Color',obj.ColorsF('jasper'))
+        set(gca, 'TickLabelInterpreter','latex','FontSize',15,'linewidth',2,'Color','none','box','off')        
+        
+        %% Plot 2 - Boxplot diario
+        subplot(3,3,2)        
+        boxplot(DataAD);
+        xticks(PosiL);
+        xticklabels(LabelBoxPlotA);
+        ylabel(NamVar,'Interpreter','latex','FontSize',18)
+        title('\bf Boxplot diario','Interpreter','latex','FontSize',25,'Color',obj.ColorsF('jasper'))
+        set(gca, 'TickLabelInterpreter','latex','FontSize',15, 'FontWeight','bold','linewidth',2,'Color','none','box','off')  
+        
+        %% Plot 3 - Histogram Diario
+        subplot(3,3,3)
+        histogram(DataM,'FaceColor',obj.ColorsF('orange (web color)'))
+        ylabel('\bf Frecuencia','Interpreter','latex','FontSize',15)
+        xlabel(NamVar,'Interpreter','latex','FontSize',15)
+        title('\bf Histograma diario','Interpreter','latex','FontSize',18,'Color',obj.ColorsF('jasper'))
+        set(gca, 'TickLabelInterpreter','latex','FontSize',15, 'FontWeight','bold','linewidth',2,'Color','none','box','off')   
+        
+        %% Plot 1 - Serie de tiempo mensual 
+        subplot(3,3,4)
+        h = area(DateM,DataM);
+        h(1).FaceColor = obj.ColorsF('blue gray');
+        h(1).FaceAlpha = 0.4;
+        % plot(DateM,DataM(:,1),'Color',[0 0.6 0.7],'LineWidth',1);
+        %xlabel('\bf Tiempo (meses)','Interpreter','latex','FontSize',18)
+        ylabel(NamVar,'Interpreter','latex','FontSize',18)
+        title('\bf Serie de tiempo mensual','Interpreter','latex','FontSize',25,'Color',obj.ColorsF('jasper'))
+        set(gca, 'TickLabelInterpreter','latex','FontSize',15,'linewidth',2,'Color','none','box','off') 
+        
+        %% Plot 2 - Boxplot Mensual
+        subplot(3,3,5)        
+        boxplot(reshape(DataM,12,[])','Labels',{'ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'});
+        ylabel(NamVar,'Interpreter','latex','FontSize',18)
+        title('\bf Boxplot mensual','Interpreter','latex','FontSize',25,'Color',obj.ColorsF('jasper'))
+        set(gca, 'TickLabelInterpreter','latex','FontSize',15, 'FontWeight','bold','linewidth',2,'Color','none','box','off')  
+        
+        %% Plot 3 - Histogram Mensual
+        subplot(3,3,6) 
+        histogram(DataM,'FaceColor',obj.ColorsF('blue gray'))
+        ylabel('\bf Frecuencia','Interpreter','latex','FontSize',15)
+        xlabel(NamVar,'Interpreter','latex','FontSize',15)
+        title('\bf Histograma mensual','Interpreter','latex','FontSize',18,'Color',obj.ColorsF('jasper'))
+        set(gca, 'TickLabelInterpreter','latex','FontSize',15, 'FontWeight','bold','linewidth',2,'Color','none','box','off')    
+        
+        %% Plot 1 - Serie de tiempo anual
+        subplot(3,3,7)
+        h = area(DateY,DataY);
+        h(1).FaceColor = obj.ColorsF('jasper');
+        h(1).FaceAlpha = 0.4;
+        % plot(DateM,DataM(:,1),'Color',[0 0.6 0.7],'LineWidth',1);
+        %xlabel('\bf Tiempo (a\~no)','Interpreter','latex','FontSize',18)
+        ylabel(NamVar,'Interpreter','latex','FontSize',18)
+        title('\bf Serie de tiempo anual','Interpreter','latex','FontSize',25,'Color',obj.ColorsF('jasper'))
+        set(gca, 'TickLabelInterpreter','latex','FontSize',15,'linewidth',2,'Color','none','box','off') 
+        
+        %% Plot 2 - Boxplot anual
+        subplot(3,3,8)        
+        boxplot(DataY,'Labels',{''});
+        ylabel(NamVar,'Interpreter','latex','FontSize',18)
+        title('\bf Boxplot anual','Interpreter','latex','FontSize',25,'Color',obj.ColorsF('jasper'))
+        set(gca, 'TickLabelInterpreter','latex','FontSize',15, 'FontWeight','bold','linewidth',2,'Color','none','box','off')  
+        
+        %% Plot 3 - Histogram Mensual
+        subplot(3,3,9) 
+        histogram(DataY,'FaceColor',obj.ColorsF('jasper'))
+        ylabel('\bf Frecuencia','Interpreter','latex','FontSize',15)
+        xlabel(NamVar,'Interpreter','latex','FontSize',15)
+        title('\bf Histograma anual','Interpreter','latex','FontSize',18,'Color',obj.ColorsF('jasper'))
+        set(gca, 'TickLabelInterpreter','latex','FontSize',15, 'FontWeight','bold','linewidth',2,'Color','none','box','off')    
+        
+        %% Guardar
+        NameFig  = fullfile(obj.PathProject,'FIGURES','Synthetic',[num2str(obj.Code(PoPo(ii))),'.jpg']);
+
+        saveas(Fig, NameFig)
+        close(Fig)
+    end
+end
+
+%%
+Code = obj.Code(PoPo);
+Code = reshape(Code,length(Code),1);
+
+%% Save Summary
+Name        = [ 'Code,X,Y,Z,Min,Max,Mean,Std,Var,Data (Number),Data (Porc),Record  Relative (Year),',...
+                'Empty (Number),Empty (Porc),ENE,FEB,MAR,ABR,MAY,JUN,JUL,AGO,SEP,OCT,NOV,DIC,Date_Init,Date_End'];
+
+ID_File     = fopen(NameFile,'w');
+
+fprintf(ID_File,'%s\n',Name);
+
+for i = 1:length(PoPo)
+    fprintf(ID_File, ['%f',repmat(',%f',1,3+22)],[Code(i),obj.X(i),obj.Y(i),obj.Z(i) Summary(i,:)]);
+    fprintf(ID_File,',%s', datestr(Sdate{i,1},'dd/mm/yyyy HH:MM:SS'));  
+    fprintf(ID_File,',%s\n', datestr(Sdate{i,2},'dd/mm/yyyy HH:MM:SS'));  
+end
+fclose(ID_File);
